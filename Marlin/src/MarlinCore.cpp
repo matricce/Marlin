@@ -712,6 +712,492 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
   #endif
 }
 
+//// SANDOR MODS //// #mod#
+
+#define BLINK_LED(MS) blink_time = MS
+uint8_t key_flag = 0; //0: nessuna azione del pulsante, 1: Premere per zero l'azione, 2: Azione del rimborso del pulsante, 3: Azione di alimentazione del pulsante, 4: Azione di stampa
+uint16_t blink_time = 0;
+uint8_t key_status_bed = 0;
+static uint32_t time_inject = 0;
+enum LED_STATUD
+{
+  LED_ON = 4000,
+  LED_BLINK_0 = 2500,
+  LED_BLINK_1 = 1500,
+  LED_BLINK_2 = 1000,
+  LED_BLINK_3 = 800,
+  LED_BLINK_4 = 500,
+  LED_BLINK_5 = 300,
+  LED_BLINK_6 = 150,
+  LED_BLINK_7 = 50,
+  LED_OFF = 0,
+};
+
+void BlinkLed(void)
+{
+  static uint32_t blink_time_previous = 0;
+  static uint32_t blink_time_start = 0;
+  if (blink_time == 0)
+  {
+    WRITE(LED_PIN, 1);
+    return;
+  }
+  if (blink_time > 3000)
+  {
+    WRITE(LED_PIN, 0);
+    return;
+  }
+  if (blink_time_previous != blink_time)
+  {
+    blink_time_previous = blink_time;
+    blink_time_start = millis();
+  }
+  if (millis() < blink_time_start + blink_time)
+  {
+    WRITE(LED_PIN, 0);
+  }
+  else if (millis() < blink_time_start + 2 * blink_time)
+  {
+    WRITE(LED_PIN, 1);
+  }
+  else
+  {
+    blink_time_start = millis();
+  }
+}
+
+void feed_filament(void)
+{
+  if (IsRunning())
+  {
+    queue.enqueue_now_P(PSTR("G92 E0"));
+    queue.enqueue_now_P(PSTR("G0 F180 E20"));
+  }
+}
+
+void retract_filament(void)
+{
+  if (IsRunning())
+  {
+    queue.enqueue_now_P(PSTR("G92 E198"));
+    queue.enqueue_now_P(PSTR("G0 F90 E200"));
+    queue.enqueue_now_P(PSTR("G0 F900 E0"));
+  }
+}
+
+void Plu_Min_Key(void)
+{
+  static uint8_t filament_status = 0;
+  static uint8_t key = 0;
+  static uint32_t key_time = 0;
+  if (key_flag == 1 || key_flag == 4)
+    return;
+  if (filament_status == 0) //(1)In attesa di stato del pulsante
+  {
+    if (!READ(MINUSK_PIN))
+    {
+      key = 0x01;
+    };
+    if (!READ(PLUSK_PIN))
+    {
+      key = 0x02;
+    };
+    if (key)
+    {
+      filament_status++;
+      key_time = millis() + 20;
+    }
+  }
+  else if (filament_status == 1) //(2)Chiave per determinare lo stato
+  {
+    if (key_time <= millis())
+    {
+      if (READ(MINUSK_PIN))
+      {
+        key &= ~0x01;
+      }
+      if (READ(PLUSK_PIN))
+      {
+        key &= ~0x02;
+      }
+      if (key)
+      {
+        thermalManager.setTargetHotend(PREHEAT_1_TEMP_HOTEND, 0); // target da pre_riscaldamento PLA
+        if (key & 0x01)
+        {
+          BLINK_LED(LED_BLINK_7);
+          LCD_MESSAGEPGM(MSG_PREHEAT_1);
+          key_flag = 2;
+        }
+        if (key & 0x02)
+        {
+          BLINK_LED(LED_BLINK_7);
+          LCD_MESSAGEPGM(MSG_PREHEAT_1);
+          key_flag = 3;
+        }
+        filament_status++;
+      }
+      else
+      {
+        key_flag = 0;
+        filament_status = 0;
+      }
+    }
+  }
+  else if (filament_status == 2) //(3)Aspettando un pulsante allentato
+  {
+    if (READ(MINUSK_PIN) && READ(PLUSK_PIN))
+    {
+      filament_status = 3;
+    }
+  }
+  else if (filament_status == 3) //(4)Lo stato dell'esecuzione del pulsante, attendere il riscaldamento
+  {
+    if (thermalManager.degHotend(active_extruder) >= PREHEAT_1_TEMP_HOTEND)
+    {
+      filament_status++;
+    }
+    else //Nell'aumento della temperatura, premere il cambiamento del pulsante
+    {
+      if (!READ(MINUSK_PIN)) //Il pulsante di rimborso è premuto
+      {
+        if (key == 0x01) // Annulla il riscaldamento
+        {
+          key = 0;
+          key_flag = 0;
+          filament_status = 6;
+          thermalManager.setTargetHotend(0, 0);
+          BLINK_LED(LED_OFF);
+        }
+        else
+        {
+          key = 0x01;
+          BLINK_LED(LED_BLINK_7);
+          key_flag = 2;
+          filament_status = 2;
+        }
+      };
+      if (!READ(PLUSK_PIN)) //Il pulsante di avanzamento è premuto
+      {
+        if (key == 0x02) //Annulla il riscaldamento
+        {
+          key = 0;
+          key_flag = 0;
+          filament_status = 6;
+          thermalManager.setTargetHotend(0, 0);
+          BLINK_LED(LED_OFF);
+        }
+        else
+        {
+          key = 0x02;
+          BLINK_LED(LED_BLINK_7);
+          key_flag = 3;
+          filament_status = 2;
+        }
+      };
+    }
+  }
+  else if (filament_status == 4) //(4)In attesa di inserire il rimborso
+  {
+    if (key & 0x01)
+    {
+      LCD_MESSAGEPGM(MSG_RETRACT);
+      BLINK_LED(LED_BLINK_2);
+      retract_filament();
+    };
+    if (key & 0x02)
+    {
+      LCD_MESSAGEPGM(MSG_EXTRUDE);
+      BLINK_LED(LED_BLINK_2);
+      feed_filament();
+    };
+    filament_status++;
+  }
+  else if (filament_status == 5) //(5)Aspettando la fine del rimborso
+  {
+    if (!planner.has_blocks_queued()) //Dopo aver atteso il ritorno al ritorno, spegnere il LED
+    {
+      if (key == 0x01)
+      {
+        LCD_MESSAGEPGM(WELCOME_MSG);
+        thermalManager.setTargetHotend(0, 0);
+        filament_status = 0;
+        key_flag = 0;
+        key = 0;
+      };
+      if (key == 0x02)
+      {
+        filament_status = 0;
+        key_flag = 0;
+        key = 0;
+      };
+    }
+    if (!READ(MINUSK_PIN))
+    {
+      if (key == 0x01) //È già nel feed e il feed è fermato.
+      {
+        BLINK_LED(LED_OFF);
+        filament_status = 6;
+        key_flag = 0;
+      }
+      else
+      {
+        key = 0x01;
+        key_flag = 2;
+        filament_status = 7;
+      }
+    }
+    if (!READ(PLUSK_PIN))
+    {
+      if (key == 0x02)
+      {
+        BLINK_LED(LED_OFF);
+        key_flag = 0;
+        filament_status = 6;
+      }
+      else
+      {
+        key = 0x02;
+        key_flag = 3;
+        filament_status = 7;
+      }
+    }
+  }
+  else if (filament_status == 8) //Aspetta che le chiavi allentate ri-riscaldare
+  {
+    if (READ(MINUSK_PIN) && READ(PLUSK_PIN)) //Il pulsante di rimborso è premuto
+    {
+      filament_status = 3;
+    }
+  }
+  else if (filament_status == 7) //Dopo aver atteso il pulsante allentato, reindirizzarsi
+  {
+    if (READ(MINUSK_PIN) && READ(PLUSK_PIN)) //Il pulsante di rimborso è premuto
+    {
+      filament_status = 4;
+    }
+  }
+  else if (filament_status == 6) //Aspetto il pulsante allentato per ricominciare
+  {
+    if (READ(MINUSK_PIN) && READ(PLUSK_PIN)) //Il pulsante di rimborso è premuto
+    {
+      BLINK_LED(LED_OFF);
+      filament_status = 0;
+    }
+  }
+
+  else
+  {
+    filament_status = 0;
+  }
+}
+
+void Home_Key(void)
+{
+  static uint8_t key_status = 0;
+  static uint32_t key_time = 0;
+
+  if (key_flag == 2 || key_flag == 3 || key_flag == 4)
+    return;
+
+  if (key_status == 0)
+  {
+    if (!READ(Z_HOME_PIN))
+    {
+      key_time = millis() + 50;
+      key_status = 1;
+    }
+  }
+  else if (key_status == 1)
+  {
+    if (key_time <= millis())
+    {
+      if (!READ(Z_HOME_PIN))
+      {
+        key_status = 2;
+      }
+      else
+      {
+        key_status = 0;
+      }
+    }
+  }
+  else if (key_status == 2)
+  {
+    if (thermalManager.degHotend(active_extruder) > 180)
+    {
+      thermalManager.disable_all_heaters(); // rafredda se premuto
+      key_time = 0;
+      key_status = 4;
+    }
+    else
+    {
+      BLINK_LED(LED_BLINK_5);
+      LCD_MESSAGEPGM(MSG_AUTO_HOME_Z);
+      DISABLE_AXIS_X();
+      DISABLE_AXIS_Y();
+      queue.enqueue_one_now("G28 Z0");
+      key_flag = 1;
+      key_status = 4;
+    }
+  }
+
+  else if (key_status == 4) //In attesa di zero.
+  {
+    if (READ(Z_HOME_PIN))
+    {
+      key_status = 3;
+    }
+  }
+  else if (key_status == 3) //In attesa di zero.
+  {
+    if (!planner.has_blocks_queued()) // attesa termine funzione
+    {
+      LCD_MESSAGEPGM(WELCOME_MSG);
+      key_flag = 0;
+      key_status = 0;
+    }
+  }
+}
+
+void Play_Key(void)
+{
+  static uint8_t key_status = 0;
+  static uint32_t key_time = 0;
+  if (key_flag == 1 || key_flag == 2 || key_flag == 3)
+    return;
+  if (key_status == 0) //(1)Pulsante d'attesa
+  {
+    if (!READ(STARTK_PIN))
+    {
+      key_time = millis();
+      key_status = 1;
+    }
+  }
+  else if (key_status == 1) //(2)Conferma del pulsante
+  {
+    if (key_time + 30 < millis())
+    {
+      if (!READ(STARTK_PIN))
+      {
+        key_time = millis();
+        key_status = 2;
+      }
+      else
+      {
+        key_status = 0;
+      }
+    }
+  }
+  else if (key_status == 2) //(3)Trattamento delle chiavi
+  {
+    if (READ(STARTK_PIN)) //In attesa di allentare il pulsante di stampa
+    {
+      key_flag = 4;
+      if (key_time + 1000 > millis()) //<一>tasto premuto brevemente
+      {
+        if (key_status_bed == 0)
+        {
+          if (!all_axes_trusted()) // se non conosce gli assi va in auto home altrimenti alza asse z di 10 mm
+          {
+            BLINK_LED(LED_BLINK_5);
+            LCD_MESSAGEPGM(MSG_AUTO_HOME);
+            queue.inject_P(PSTR("G28"));
+            time_inject = millis() + 6000UL;
+          }
+          else
+          {
+            BLINK_LED(LED_BLINK_5);
+            LCD_MESSAGEPGM(MSG_MOVE_Z);
+            if (current_position[Z_AXIS] < 90) // limite z  90 mm
+            {
+              destination[Z_AXIS] = current_position[Z_AXIS] + 10;
+              feedrate_mm_s = 10;
+              prepare_internal_move_to_destination(feedrate_mm_s);
+              time_inject = millis() + 2000UL;
+            }
+            else
+            {
+              destination[Z_AXIS] = current_position[Z_AXIS] - 10;
+              feedrate_mm_s = 10;
+              prepare_internal_move_to_destination(feedrate_mm_s);
+              time_inject = millis() + 2000UL;
+            }
+          }
+        }
+        else
+        {
+          if (key_status_bed == 1)
+          {
+            LCD_MESSAGEPGM(MSG_NEXT_CORNER);
+            queue.inject_P(PSTR("G0 X80 Y20 F1800")); // posizione 2
+            key_status_bed = 2;
+          }
+          else if (key_status_bed == 2)
+          {
+            LCD_MESSAGEPGM(MSG_NEXT_CORNER);
+            queue.inject_P(PSTR("G0 X20 Y80 F1800")); // posizione 3
+            key_status_bed = 3;
+          }
+          else if (key_status_bed == 3)
+          {
+            LCD_MESSAGEPGM(MSG_NEXT_CORNER);
+            queue.inject_P(PSTR("G0 X20 Y20 F1800")); // posizione 4
+            key_status_bed = 4;
+          }
+          else if (key_status_bed == 4)
+          {
+            LCD_MESSAGEPGM(MSG_LEVEL_BED_HOMING);
+            queue.inject_P(PSTR("G0 X50 Y50 F1800")); // posizione 5
+            key_status_bed = 5;
+          }
+          else if (key_status_bed == 5)
+          {
+            BLINK_LED(LED_BLINK_5);
+            LCD_MESSAGEPGM(MSG_LEVEL_BED_DONE);
+            queue.inject_P(PSTR("G0 X100 Y100 F1800")); // homing xy chiusura funzione livellamento
+            key_status_bed = 0;
+            time_inject = millis() + 5000UL;
+          }
+        }
+      }
+      else //<二>tasto premuto a lungo
+      {
+        if (key_status_bed != 0) // annulla funzione livellamento
+        {
+          BLINK_LED(LED_BLINK_5);
+          LCD_MESSAGEPGM(MSG_AUTO_HOME);
+          queue.inject_P(PSTR("G28"));
+          time_inject = millis() + 6000UL;
+          key_status_bed = 0;
+        }
+        else
+        {
+          if (all_axes_homed())
+          {
+            BLINK_LED(LED_BLINK_3);
+            LCD_MESSAGEPGM(MSG_NEXT_CORNER);
+            queue.inject_P(PSTR("G0 X80 Y80 Z0 F1000")); // posizione 1 livellamento
+            key_status_bed = 1;
+          }
+          else // assi non in home
+          {
+            BLINK_LED(LED_BLINK_5);
+            LCD_MESSAGEPGM(MSG_AUTO_HOME);
+            queue.inject_P(PSTR("G28"));
+            time_inject = millis() + 6000UL;
+            key_status_bed = 0;
+          }
+        }
+      }
+      key_status = 0;
+      key_time = 0;
+    }
+  }
+}
+
+//// SANDOR MODS END //// #mod#
+
 /**
  * Standard idle routine keeps the machine alive:
  *  - Core Marlin activities
@@ -735,6 +1221,62 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
  *  - Handle Joystick jogging
  */
 void idle(bool no_stepper_sleep/*=false*/) {
+   //// SANDOR MODS //// #mod#
+
+  BlinkLed();
+  if (!IS_SD_PRINTING() && !IS_SD_PAUSED()) // in stampa o pausa, disattiva tasti e funzioni lampeggio
+  {
+    Home_Key();
+    Plu_Min_Key();
+    Play_Key();
+
+    if (key_flag == 4) // attesa chiusura dopo funzioni tasto play
+    {
+      if (key_status_bed == 0)
+      {
+        if (time_inject < millis())
+        {
+          time_inject = 0;
+          key_flag = 0;
+        }
+      }
+    }
+    if (key_flag == 0) // a tasti fermi, lampegga se letto o augello sono caldi, altimenti spegne led
+    {
+      if ((thermalManager.degHotend(active_extruder) <= thermalManager.degTargetHotend(active_extruder) + 2))
+      {
+        if (thermalManager.degHotend(active_extruder) <= thermalManager.degTargetHotend(active_extruder) + 2)
+        {
+          BLINK_LED(LED_BLINK_5);
+        }
+      }
+      else
+      {
+        LCD_MESSAGEPGM(WELCOME_MSG);
+        BLINK_LED(LED_OFF);
+      }
+    }
+  }
+  else
+  {
+    if (card.isPrinting()) // lampeggio nella fase di preriscaldamento e stampa
+    {
+      if (thermalManager.degHotend(active_extruder) < thermalManager.degTargetHotend(active_extruder) - 2)
+      {
+        BLINK_LED(LED_BLINK_7); // lampeggio in fase riscaldamento hotend
+      }
+      else
+      {
+        BLINK_LED(LED_BLINK_4); // lampeggio in fase di stampa
+      }
+    }
+    if (card.isPaused()) // lampeggio nella fase di pausa
+    {
+      BLINK_LED(LED_BLINK_2);
+    }
+  }
+
+  //// SANDOR MODS END //// #mod#
   #if ENABLED(MARLIN_DEV_MODE)
     static uint16_t idle_depth = 0;
     if (++idle_depth > 5) SERIAL_ECHOLNPAIR("idle() call depth: ", idle_depth);
@@ -1366,6 +1908,28 @@ void setup() {
   #if HAS_HOME
     SET_INPUT_PULLUP(HOME_PIN);
   #endif
+//// SANDOR MODS //// #mod#
+
+#if HAS_Z_HOME
+  SET_INPUT_PULLUP(Z_HOME_PIN);
+#endif
+
+#if HAS_PLUSK
+  SET_INPUT_PULLUP(PLUSK_PIN);
+#endif
+
+#if HAS_MINUSK
+  SET_INPUT_PULLUP(MINUSK_PIN);
+#endif
+
+#if HAS_STARTK
+  SET_INPUT_PULLUP(STARTK_PIN);
+#endif
+
+  OUT_WRITE(LED_PIN, 1);
+  BLINK_LED(0);
+
+//// SANDOR MODS END //// #mod#
 
   #if ENABLED(CUSTOM_USER_BUTTONS)
     #define INIT_CUSTOM_USER_BUTTON_PIN(N) do{ SET_INPUT(BUTTON##N##_PIN); WRITE(BUTTON##N##_PIN, !BUTTON##N##_HIT_STATE); }while(0)

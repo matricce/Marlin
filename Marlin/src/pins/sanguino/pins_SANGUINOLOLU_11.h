@@ -57,6 +57,15 @@
   #define BOARD_INFO_NAME "Sanguinololu <1.2"
 #endif
 
+///// SANDOR MODS ///// #mod#
+
+#define STARTK_PIN    30          
+#define PLUSK_PIN     29     
+#define MINUSK_PIN    28    
+#define Z_HOME_PIN     5  		
+
+///// SANDOR MODS END //// #mod#
+
 //
 // Limit Switches
 //
@@ -209,7 +218,7 @@
 
     #else
 
-      #define DOGLCD_A0                       30
+      #define DOGLCD_A0                       -1 // #mod#
 
       #if ENABLED(MAKRPANEL)
 
@@ -219,8 +228,8 @@
 
       #elif IS_MELZI
 
-        #define BEEPER_PIN                    27
-        #define DOGLCD_CS                     28
+        #define BEEPER_PIN                    -1 // #mod#
+        #define DOGLCD_CS                     -1 // #mod#
 
       #else                                       // !MAKRPANEL
 
@@ -231,9 +240,9 @@
     #endif
 
     // Uncomment screen orientation
-    //#define LCD_SCREEN_ROT_0
+    #define LCD_SCREEN_ROT_0  //#mod#
     //#define LCD_SCREEN_ROT_90
-    //#define LCD_SCREEN_ROT_180
+    //#define LCD_SCREEN_ROT_180 //#mod#
     //#define LCD_SCREEN_ROT_270
 
   #elif ENABLED(ZONESTAR_LCD)                     // For the Tronxy Melzi boards
@@ -279,8 +288,8 @@
 
   #else                                           // !LCD_FOR_MELZI && !ZONESTAR_LCD && !LCD_I2C_PANELOLU2
 
-    #define BTN_ENC                           16
-    #define LCD_SDSS                          28  // Smart Controller SD card reader rather than the Melzi
+    #define BTN_ENC                            6  // #mod
+    // #define LCD_SDSS                          28  // Smart Controller SD card reader rather than the Melzi // #mod#
 
   #endif
 

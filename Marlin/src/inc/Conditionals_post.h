@@ -2771,6 +2771,23 @@
   #define HAS_PHOTOGRAPH 1
 #endif
 
+/// SANDOR MOD /// #mod#
+
+#if PIN_EXISTS(Z_HOME)
+  #define HAS_Z_HOME 1
+#endif
+#if PIN_EXISTS(STARTK)
+  #define HAS_STARTK 1
+#endif
+#if PIN_EXISTS(PLUSK)
+  #define HAS_PLUSK 1
+#endif
+#if PIN_EXISTS(MINUSK)
+  #define HAS_MINUSK 1
+#endif
+
+/// SANDOR MOD END /// #mod#
+
 // Digital control
 #if PIN_EXISTS(STEPPER_RESET)
   #define HAS_STEPPER_RESET 1
